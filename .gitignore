@@ -1,0 +1,46 @@
+# Python additional
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage reports
+coverage/
+
+# Node.js
+node_modules/
+
+# Next.js
+.next/
+
+# Next.js export
+/out/
+
+# Vercel
+.vercel
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+
+# Media files
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.mov
+*.avi
+
+# Credentials (already have .env but being explicit)
+credentials.json
+config.json
+secrets.json
