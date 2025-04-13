@@ -1,14 +1,14 @@
 // Delhi geographic constants
 export const DELHI_CENTER = {
-  longitude: 77.1025,
-  latitude: 28.7041,
+  longitude: 77.1025,  // Centered properly on Delhi
+  latitude: 28.65,
 };
 
 export const DELHI_BOUNDS = {
-  maxLongitude: 77.6,   // Eastern bound
-  minLongitude: 76.8,   // Western bound
-  maxLatitude: 29.0,    // Northern bound
-  minLatitude: 28.4     // Southern bound
+  maxLongitude: 77.5,   // Eastern bound - expanded
+  minLongitude: 76.8,   // Western bound - expanded
+  maxLatitude: 29.0,    // Northern bound - expanded
+  minLatitude: 28.3     // Southern bound - expanded
 };
 
 // AQI Category thresholds

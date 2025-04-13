@@ -69,16 +69,16 @@ export function AQIProvider({ children }) {
       
       setLoading(true);
       try {
-        // Calculate view bounds based on current viewport
+        // Always use the entire Delhi bounds instead of viewport-based bounds
         const bounds = {
-          lat_min: Math.max(DELHI_BOUNDS.minLatitude, viewState.latitude - 0.1 / (viewState.zoom / 10)),
-          lat_max: Math.min(DELHI_BOUNDS.maxLatitude, viewState.latitude + 0.1 / (viewState.zoom / 10)),
-          lon_min: Math.max(DELHI_BOUNDS.minLongitude, viewState.longitude - 0.1 / (viewState.zoom / 10)),
-          lon_max: Math.min(DELHI_BOUNDS.maxLongitude, viewState.longitude + 0.1 / (viewState.zoom / 10)),
+          lat_min: DELHI_BOUNDS.minLatitude,
+          lat_max: DELHI_BOUNDS.maxLatitude,
+          lon_min: DELHI_BOUNDS.minLongitude,
+          lon_max: DELHI_BOUNDS.maxLongitude,
           zoom_level: Math.floor(viewState.zoom)
         };
         
-        console.log(`Fetching AQI data at zoom ${viewState.zoom}, bounds:`, bounds);
+        console.log(`Fetching fixed Delhi AQI data at zoom ${viewState.zoom}`);
         
         // Set useMockData to true to force using mock data
         const useMockData = true; // TEMPORARY: Force mock data for testing heatmap
@@ -91,10 +91,18 @@ export function AQIProvider({ children }) {
             // Inline mock data generator if the import fails
             const features = [];
             const gridSize = 20;
+            // Use fixed bounds for Delhi regardless of pan/zoom
+            const fixedBounds = {
+              lat_min: DELHI_BOUNDS.minLatitude,
+              lat_max: DELHI_BOUNDS.maxLatitude,
+              lon_min: DELHI_BOUNDS.minLongitude,
+              lon_max: DELHI_BOUNDS.maxLongitude
+            };
+            
             for (let i = 0; i < gridSize; i++) {
               for (let j = 0; j < gridSize; j++) {
-                const lat = bounds.lat_min + (bounds.lat_max - bounds.lat_min) * (i / (gridSize - 1));
-                const lon = bounds.lon_min + (bounds.lon_max - bounds.lon_min) * (j / (gridSize - 1));
+                const lat = fixedBounds.lat_min + (fixedBounds.lat_max - fixedBounds.lat_min) * (i / (gridSize - 1));
+                const lon = fixedBounds.lon_min + (fixedBounds.lon_max - fixedBounds.lon_min) * (j / (gridSize - 1));
                 
                 const aqi = 50 + (i + j) * 10 + Math.random() * 50;
                 

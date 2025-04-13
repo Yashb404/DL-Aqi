@@ -8,6 +8,13 @@ import AQILegend from './AQILegend';
 import HeatmapLayer from './HeatmapLayer';
 import styles from '../styles/Home.module.css';
 
+// Delhi coordinates
+const DELHI_CENTER = [77.1025, 28.65];
+const DELHI_BOUNDS = [
+  [76.8, 28.3], // Southwest coordinates [lng, lat] - expanded
+  [77.5, 29.0]  // Northeast coordinates [lng, lat] - expanded
+];
+
 // Helper function to calculate distance between two points (Haversine formula)
 function calculateDistance(lon1, lat1, lon2, lat2) {
   // Convert degrees to radians
@@ -32,14 +39,13 @@ export default function MapComponent() {
     setViewState, 
     aqiData, 
     handlePointClick,
-    DELHI_BOUNDS,
     error: contextError
   } = useAQI();
   
   const mapRef = useRef(null);
   const [visibleLayers, setVisibleLayers] = useState({
     heatmap: true,
-    points: true
+    points: false
   });
   const [dataError, setDataError] = useState(null);
   
@@ -62,26 +68,11 @@ export default function MapComponent() {
     }
   }, [aqiData, contextError]);
   
-  // Keep the viewport within Delhi bounds
+  // Update the handleMove function to keep data fixed
   const handleMove = useCallback((evt) => {
-    let newViewState = { ...evt.viewState };
-    
-    // Apply bounds constraints
-    if (newViewState.longitude > DELHI_BOUNDS.maxLongitude) {
-      newViewState.longitude = DELHI_BOUNDS.maxLongitude;
-    }
-    if (newViewState.longitude < DELHI_BOUNDS.minLongitude) {
-      newViewState.longitude = DELHI_BOUNDS.minLongitude;
-    }
-    if (newViewState.latitude > DELHI_BOUNDS.maxLatitude) {
-      newViewState.latitude = DELHI_BOUNDS.maxLatitude;
-    }
-    if (newViewState.latitude < DELHI_BOUNDS.minLatitude) {
-      newViewState.latitude = DELHI_BOUNDS.minLatitude;
-    }
-    
-    setViewState(newViewState);
-  }, [setViewState, DELHI_BOUNDS]);
+    // Only update the viewState, don't transform data
+    setViewState(evt.viewState);
+  }, [setViewState]);
   
   // Toggle layer visibility
   const toggleLayer = useCallback((layer) => {
@@ -123,9 +114,13 @@ export default function MapComponent() {
     type: 'circle',
     paint: {
       'circle-radius': [
-        'interpolate', ['linear'], ['zoom'],
+        'interpolate', 
+        ['linear'], 
+        ['zoom'],
         8, 3,
-        16, 8
+        12, 5,
+        16, 8,
+        18, 12
       ],
       'circle-color': [
         'interpolate',
@@ -145,11 +140,21 @@ export default function MapComponent() {
         500, '#7E0023'   // Hazardous
       ],
       'circle-opacity': [
-        'interpolate', ['linear'], ['zoom'],
+        'interpolate', 
+        ['linear'], 
+        ['zoom'],
         8, 0.5,
-        14, 0.8
+        14, 0.7,
+        18, 0.9
       ],
-      'circle-stroke-width': 1,
+      'circle-stroke-width': [
+        'interpolate',
+        ['linear'],
+        ['zoom'],
+        8, 0.5,
+        14, 1,
+        18, 2
+      ],
       'circle-stroke-color': '#fff'
     }
   };
@@ -190,23 +195,55 @@ export default function MapComponent() {
   }, [handlePointClick, findClosestPoint, setViewState]);
 
   return (
-    <div className={styles.mapWrapper}>
+    <div className='h-full relative'>
       <Map
         {...viewState}
         ref={mapRef}
         onMove={handleMove}
         mapStyle="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
-        interactiveLayerIds={['aqi-points']}
+        style={{ width: '100%', height: '100%' }}
+        maxBounds={DELHI_BOUNDS}
         onClick={handleClick}
-        minZoom={8}
+        minZoom={5}
         maxZoom={18}
-        maxBounds={[
-          [DELHI_BOUNDS.minLongitude, DELHI_BOUNDS.minLatitude], // Southwest coordinates
-          [DELHI_BOUNDS.maxLongitude, DELHI_BOUNDS.maxLatitude]  // Northeast coordinates
-        ]}
-        attributionControl={false}
+        interactiveLayerIds={['aqi-points']}
+        initialViewState={{
+          longitude: DELHI_CENTER[0],
+          latitude: DELHI_CENTER[1],
+          zoom: 7
+        }}
       >
         <NavigationControl position="top-right" showCompass={true} />
+        
+        {/* Delhi Border */}
+        <Source
+          id="delhi-border"
+          type="geojson"
+          data={{
+            type: 'Feature',
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[
+                [DELHI_BOUNDS[0][0], DELHI_BOUNDS[0][1]], // SW
+                [DELHI_BOUNDS[1][0], DELHI_BOUNDS[0][1]], // SE
+                [DELHI_BOUNDS[1][0], DELHI_BOUNDS[1][1]], // NE
+                [DELHI_BOUNDS[0][0], DELHI_BOUNDS[1][1]], // NW
+                [DELHI_BOUNDS[0][0], DELHI_BOUNDS[0][1]], // SW (close the loop)
+              ]]
+            },
+            properties: {}
+          }}
+        >
+          <Layer
+            id="delhi-border-line"
+            type="line"
+            paint={{
+              'line-color': '#000',
+              'line-width': 2,
+              'line-opacity': 0.8
+            }}
+          />
+        </Source>
         
         {/* Simple Direct Heatmap */}
         {visibleLayers.heatmap && aqiData && aqiData.features && aqiData.features.length > 0 && (
@@ -220,100 +257,53 @@ export default function MapComponent() {
               type="heatmap"
               paint={{
                 // Fixed weight for testing
-                'heatmap-weight': 1, // Use a constant weight instead of interpolation
+                'heatmap-weight': 1.5, // Increased weight for better blending
                 
-                // Much higher intensity
+                // Much higher intensity with better high-zoom values
                 'heatmap-intensity': [
                   'interpolate',
                   ['linear'],
                   ['zoom'],
-                  8, 1,
-                  12, 2,
-                  15, 3
+                  5, 0.7,
+                  8, 1.0,
+                  12, 1.5,
+                  15, 2.0,
+                  18, 2.5
                 ],
                 
-                // Brighter colors
+                // More translucent colors
                 'heatmap-color': [
                   'interpolate',
                   ['linear'],
                   ['heatmap-density'],
                   0, 'rgba(33, 102, 172, 0)',
-                  0.2, 'rgb(103, 169, 207)',
-                  0.4, 'rgb(209, 229, 240)',
-                  0.6, 'rgb(253, 219, 199)',
-                  0.8, 'rgb(239, 138, 98)',
-                  1, 'rgb(178, 24, 43)'
+                  0.2, 'rgba(103, 169, 207, 0.7)',
+                  0.4, 'rgba(209, 229, 240, 0.7)',
+                  0.6, 'rgba(253, 219, 199, 0.7)',
+                  0.8, 'rgba(239, 138, 98, 0.7)',
+                  1, 'rgba(178, 24, 43, 0.7)'
                 ],
                 
-                // Much larger radius for visibility
+                // Larger radius for smoother appearance and better merging
                 'heatmap-radius': [
                   'interpolate',
                   ['linear'],
                   ['zoom'],
-                  8, 30,
-                  11, 50,
-                  15, 70
+                  5, 15,
+                  8, 40, 
+                  11, 60,
+                  15, 80,
+                  18, 120
                 ],
                 
-                // Full opacity
-                'heatmap-opacity': 1
+                // Lower opacity
+                'heatmap-opacity': 0.65
               }}
             />
           </Source>
         )}
         
-        {/* Much simpler heatmap as fallback */}
-        {aqiData && aqiData.features && aqiData.features.length > 0 && (
-          <Source
-            id="simple-heatmap"
-            type="geojson"
-            data={aqiData}
-          >
-            <Layer
-              id="simple-heat"
-              type="heatmap"
-              paint={{
-                'heatmap-weight': 1,
-                'heatmap-intensity': 1,
-                'heatmap-color': [
-                  'step',
-                  ['heatmap-density'],
-                  'rgba(0, 0, 255, 0)',
-                  0.1, '#0080ff',
-                  0.3, '#00ff00',
-                  0.5, '#ffff00',
-                  0.7, '#ff0000',
-                  1.0, '#ff0000'
-                ],
-                'heatmap-radius': 40,
-                'heatmap-opacity': 1
-              }}
-            />
-          </Source>
-        )}
-        
-        {/* Big visible circles as last resort */}
-        {aqiData && aqiData.features && aqiData.features.length > 0 && (
-          <Source
-            id="test-circles"
-            type="geojson"
-            data={aqiData}
-          >
-            <Layer
-              id="data-circles"
-              type="circle"
-              paint={{
-                'circle-radius': 20,
-                'circle-color': '#ff0000',
-                'circle-opacity': 0.5,
-                'circle-stroke-width': 1,
-                'circle-stroke-color': '#fff'
-              }}
-            />
-          </Source>
-        )}
-        
-        {/* Points Layer */}
+        {/* Only show points layer if enabled */}
         {aqiData && aqiData.features && aqiData.features.length > 0 && visibleLayers.points && (
           <Source type="geojson" data={aqiData}>
             <Layer {...pointLayer} />
@@ -337,9 +327,6 @@ export default function MapComponent() {
         {aqiData ? (
           <div>
             <strong>Data Points:</strong> {aqiData.features?.length || 0}
-            {aqiData.metadata?.is_mock_data && (
-              <span style={{color: 'orange'}}> (Mock Data)</span>
-            )}
           </div>
         ) : (
           <div style={{color: 'red'}}>No Data Available</div>
