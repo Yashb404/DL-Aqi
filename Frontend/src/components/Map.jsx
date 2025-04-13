@@ -327,6 +327,7 @@ export default function MapComponent() {
         {aqiData ? (
           <div>
             <strong>Data Points:</strong> {aqiData.features?.length || 0}
+            
           </div>
         ) : (
           <div style={{color: 'red'}}>No Data Available</div>

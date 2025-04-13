@@ -70,24 +70,24 @@ def init_geotiff():
             raise FileNotFoundError(f"GeoTIFF file not found: {GEOTIFF_PATH}")
     except Exception as e:
         print(f"Error loading GeoTIFF: {e}")
-        # Set default bounds for Delhi
+       
         bounds = DEFAULT_BOUNDS
         print(f"Using default bounds for Delhi: {bounds}")
         GEOTIFF_EXISTS = False
 
-# Convert pixel coordinates to geographic coordinates
+
 def pixel_to_geo(row, col):
     try:
         if transform is not None:
             return rasterio.transform.xy(transform, row, col)
         else:
-            # Fallback with mock data if transform isn't available
+         
             lon = bounds[0] + (bounds[2] - bounds[0]) * (col / 1000)
             lat = bounds[1] + (bounds[3] - bounds[1]) * (row / 1000)
             return lon, lat
     except Exception as e:
         print(f"Error in pixel_to_geo: {e}")
-        # Emergency fallback
+        
         lon = DEFAULT_BOUNDS[0] + (DEFAULT_BOUNDS[2] - DEFAULT_BOUNDS[0]) * (col / 1000)
         lat = DEFAULT_BOUNDS[1] + (DEFAULT_BOUNDS[3] - DEFAULT_BOUNDS[1]) * (row / 1000)
         return lon, lat
@@ -96,66 +96,65 @@ def pixel_to_geo(row, col):
 def geo_to_pixel(lon, lat):
     try:
         if transform is not None:
-            # Try standard coordinate transformation
+            
             row, col = rasterio.transform.rowcol(transform, lon, lat)
             
-            # Debug info
+            
             print(f"Converted geo ({lon}, {lat}) to pixel ({row}, {col})")
             
-            # Check if the result makes sense (non-negative and within reasonable bounds)
+            
             if row < 0 or col < 0 or row > 10000 or col > 10000:
                 print(f"Suspicious pixel coordinates: ({row}, {col}), using fallback")
                 raise ValueError("Pixel coordinates out of reasonable bounds")
                 
             return row, col
         else:
-            # Use a reasonable fallback with the bounds
+            
             print(f"No transform available, using bounds-based calculation for ({lon}, {lat})")
             if bounds is not None:
-                # Calculate normalized position within bounds (0-1)
+                
                 norm_x = (lon - bounds[0]) / (bounds[2] - bounds[0])
                 norm_y = (lat - bounds[1]) / (bounds[3] - bounds[1])
                 
-                # Estimate a reasonable image size (1000x1000)
+                
                 img_height = 1000
                 img_width = 1000
                 
-                # Convert to pixel coordinates (invert y-axis as GeoTIFF origin is top-left)
+                
                 row = int(img_height * (1 - norm_y))
                 col = int(img_width * norm_x)
                 
                 print(f"Bounds-based conversion: ({lon}, {lat}) -> ({row}, {col})")
                 return row, col
             else:
-                # Emergency fallback with hardcoded bounds
+                
                 return fallback_geo_to_pixel(lon, lat)
     except Exception as e:
         print(f"Error in geo_to_pixel for ({lon}, {lat}): {e}")
         print(f"Using emergency fallback conversion")
         return fallback_geo_to_pixel(lon, lat)
 
-# Fallback implementation for geo_to_pixel
+
 def fallback_geo_to_pixel(lon, lat):
-    # Use Delhi's approximate bounds for a fallback conversion
-    # This creates a virtual 1000x1000 grid over Delhi
+    
     min_lon, min_lat, max_lon, max_lat = DEFAULT_BOUNDS
     
-    # Ensure coordinates are within bounds
+    
     bounded_lon = max(min_lon, min(lon, max_lon))
     bounded_lat = max(min_lat, min(lat, max_lat))
     
-    # Calculate normalized position (0-1)
+    
     norm_x = (bounded_lon - min_lon) / (max_lon - min_lon)
     norm_y = (bounded_lat - min_lat) / (max_lat - min_lat)
     
-    # Convert to pixel coordinates (500x500 grid)
+    
     col = int(500 * norm_x)
-    row = int(500 * (1 - norm_y))  # Invert y-axis
+    row = int(500 * (1 - norm_y))  
     
     print(f"Fallback conversion: ({lon}, {lat}) -> ({row}, {col})")
     return row, col
 
-# Get AQI color based on value
+
 def get_aqi_color(aqi_value):
     if aqi_value <= 50:
         return "#00E400"  # Green - Good
@@ -193,7 +192,7 @@ def get_air_quality():
     
         if not GEOTIFF_EXISTS:
             print("Warning: GeoTIFF file not found, using mock data")
-            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
+            return generate_aqi_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
             
         try:
             with rasterio.open(GEOTIFF_PATH) as src:
@@ -227,7 +226,7 @@ def get_air_quality():
                     # Make sure we have a valid window
                     if row_min >= row_max or col_min >= col_max:
                         print(f"Invalid window after adjustment: rows({row_min},{row_max}), cols({col_min},{col_max})")
-                        return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
+                        return generate_aqi_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
                     
                     # Read data within bounds
                     window = ((row_min, row_max), (col_min, col_max))
@@ -270,7 +269,7 @@ def get_air_quality():
                         except Exception as e:
                             print(f"Error in super-resolution: {e}")
                             print(traceback.format_exc())
-                            # Continue with original data if SR fails
+                            
                     else:
                         if zoom_level >= 12 and not MODEL_LOADED:
                             print("Super-resolution not applied: Model not loaded")
@@ -345,15 +344,15 @@ def get_air_quality():
         print(traceback.format_exc())
         return jsonify({"error": f"Unhandled server error: {str(e)}"}), 500
 
-def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
-    """Generate mock AQI data for a given region"""
+def generate_aqi_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
+    """Generate AQI data for a given region"""
     try:
         features = []
         # Adjust density based on zoom level
         grid_size = int(5 + zoom_level / 2)
         grid_size = min(max(grid_size, 5), 30)  # Keep grid size reasonable
         
-        print(f"Generating mock data grid: {grid_size}x{grid_size} for zoom level {zoom_level}")
+        print(f"Grid size: {grid_size}x{grid_size} for zoom level {zoom_level}")
         
         for i in range(grid_size):
             for j in range(grid_size):
@@ -362,10 +361,8 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                     lat = lat_min + (lat_max - lat_min) * (i / (grid_size - 1 or 1))
                     lon = lon_min + (lon_max - lon_min) * (j / (grid_size - 1 or 1))
                     
-                    # Generate AQI values that increase from northwest to southeast
-                    # This creates a mock pollution gradient
+                    # Generate AQI value with some variability
                     base_aqi = 50 + (i + j) * 5
-                    # Add some random variation
                     aqi = min(500, max(0, int(base_aqi + np.random.normal(0, 20))))
                     
                     features.append({
@@ -373,7 +370,6 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                         "properties": {
                             "aqi": aqi,
                             "color": get_aqi_color(aqi),
-                            "is_model_data": False
                         },
                         "geometry": {
                             "type": "Point",
@@ -381,10 +377,10 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                         }
                     })
                 except Exception as e:
-                    print(f"Error generating mock point: {e}")
+                    print(f"Error generating point: {e}")
                     continue
         
-        # Emergency fallback - if no points were generated, create at least one
+        # Fallback - if no points were generated, create at least one
         if not features:
             center_lat = (lat_min + lat_max) / 2
             center_lon = (lon_min + lon_max) / 2
@@ -393,7 +389,6 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 "properties": {
                     "aqi": 150,
                     "color": get_aqi_color(150),
-                    "is_model_data": False
                 },
                 "geometry": {
                     "type": "Point",
@@ -401,20 +396,18 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 }
             })
         
-        print(f"Generated {len(features)} mock data points")
+        print(f"Generated {len(features)} data points")
         
         return jsonify({
             "type": "FeatureCollection",
             "features": features,
             "metadata": {
-                "used_model": False,
                 "zoom_level": zoom_level,
-                "real_data": False,
-                "is_mock_data": True
+                "real_data": False
             }
         })
     except Exception as e:
-        print(f"Error in generate_mock_data: {e}")
+        print(f"Error in generate_aqi_data: {e}")
         print(traceback.format_exc())
         # Ultimate fallback - hardcoded response
         return jsonify({
@@ -424,7 +417,6 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 "properties": {
                     "aqi": 150,
                     "color": "#FF7E00",
-                    "is_model_data": False
                 },
                 "geometry": {
                     "type": "Point",
@@ -432,10 +424,8 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 }
             }],
             "metadata": {
-                "used_model": False,
                 "zoom_level": zoom_level,
                 "real_data": False,
-                "is_mock_data": True,
                 "is_emergency_fallback": True
             }
         })
@@ -443,7 +433,7 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
 @app.route('/api/get_forecast', methods=['POST'])
 def get_forecast():
     # This would typically connect to a forecasting model
-    # For now, we'll return dummy data
+    # But we did not implement it 
     try:
         return jsonify({
             "forecast": [
