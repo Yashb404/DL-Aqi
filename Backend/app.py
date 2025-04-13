@@ -28,20 +28,26 @@ if os.path.exists(model_path):
     try:
         model.load_weights(model_path)
         print(f"Model weights loaded from {model_path}")
+        MODEL_LOADED = True
     except Exception as e:
-        print(f"Warning: Could not load model weights. Using randomly initialized weights. Error: {e}")
-        print("This is fine for demonstration purposes, but will not provide accurate super-resolution.")
+        print(f"Error: Could not load model weights. Error: {e}")
+        print("The model will not provide accurate super-resolution.")
+        MODEL_LOADED = False
 else:
-    print(f"Warning: Model file not found at {model_path}. Using randomly initialized weights.")
-    print("This is fine for demonstration purposes, but will not provide accurate super-resolution.")
+    print(f"Error: Model file not found at {model_path}")
+    print("Please ensure the model weights file exists.")
+    MODEL_LOADED = False
 
 # GeoTIFF file path - update this to your actual file path
 GEOTIFF_PATH = os.path.join(os.path.dirname(__file__), 'data', 'Delhi_NO2_Jan2023.tif')
 
 # Check if the GeoTIFF file exists
 if not os.path.exists(GEOTIFF_PATH):
-    print(f"Warning: GeoTIFF file not found at {GEOTIFF_PATH}")
-    print("The API will still run, but will return mock data instead of actual AQI data.")
+    print(f"Error: GeoTIFF file not found at {GEOTIFF_PATH}")
+    print("Please ensure the GeoTIFF file exists in the data directory.")
+    GEOTIFF_EXISTS = False
+else:
+    GEOTIFF_EXISTS = True
 
 # Cache the transformation parameters
 transform = None
@@ -51,7 +57,7 @@ DEFAULT_BOUNDS = (77.0, 28.4, 77.4, 28.8)  # (left, bottom, right, top) or (west
 
 # Initialize the geotiff data
 def init_geotiff():
-    global transform, bounds
+    global transform, bounds, GEOTIFF_EXISTS
     try:
         if os.path.exists(GEOTIFF_PATH):
             with rasterio.open(GEOTIFF_PATH) as src:
@@ -59,6 +65,7 @@ def init_geotiff():
                 bounds = src.bounds
                 print(f"GeoTIFF loaded: {GEOTIFF_PATH}")
                 print(f"Bounds: {bounds}")
+                GEOTIFF_EXISTS = True
         else:
             raise FileNotFoundError(f"GeoTIFF file not found: {GEOTIFF_PATH}")
     except Exception as e:
@@ -66,6 +73,7 @@ def init_geotiff():
         # Set default bounds for Delhi
         bounds = DEFAULT_BOUNDS
         print(f"Using default bounds for Delhi: {bounds}")
+        GEOTIFF_EXISTS = False
 
 # Convert pixel coordinates to geographic coordinates
 def pixel_to_geo(row, col):
@@ -88,18 +96,64 @@ def pixel_to_geo(row, col):
 def geo_to_pixel(lon, lat):
     try:
         if transform is not None:
-            return rasterio.transform.rowcol(transform, lon, lat)
-        else:
-            # Fallback with mock data if transform isn't available
-            row = int(1000 * (lat - bounds[1]) / (bounds[3] - bounds[1]))
-            col = int(1000 * (lon - bounds[0]) / (bounds[2] - bounds[0]))
+            # Try standard coordinate transformation
+            row, col = rasterio.transform.rowcol(transform, lon, lat)
+            
+            # Debug info
+            print(f"Converted geo ({lon}, {lat}) to pixel ({row}, {col})")
+            
+            # Check if the result makes sense (non-negative and within reasonable bounds)
+            if row < 0 or col < 0 or row > 10000 or col > 10000:
+                print(f"Suspicious pixel coordinates: ({row}, {col}), using fallback")
+                raise ValueError("Pixel coordinates out of reasonable bounds")
+                
             return row, col
+        else:
+            # Use a reasonable fallback with the bounds
+            print(f"No transform available, using bounds-based calculation for ({lon}, {lat})")
+            if bounds is not None:
+                # Calculate normalized position within bounds (0-1)
+                norm_x = (lon - bounds[0]) / (bounds[2] - bounds[0])
+                norm_y = (lat - bounds[1]) / (bounds[3] - bounds[1])
+                
+                # Estimate a reasonable image size (1000x1000)
+                img_height = 1000
+                img_width = 1000
+                
+                # Convert to pixel coordinates (invert y-axis as GeoTIFF origin is top-left)
+                row = int(img_height * (1 - norm_y))
+                col = int(img_width * norm_x)
+                
+                print(f"Bounds-based conversion: ({lon}, {lat}) -> ({row}, {col})")
+                return row, col
+            else:
+                # Emergency fallback with hardcoded bounds
+                return fallback_geo_to_pixel(lon, lat)
     except Exception as e:
-        print(f"Error in geo_to_pixel: {e}")
-        # Emergency fallback
-        row = int(1000 * (lat - DEFAULT_BOUNDS[1]) / (DEFAULT_BOUNDS[3] - DEFAULT_BOUNDS[1]))
-        col = int(1000 * (lon - DEFAULT_BOUNDS[0]) / (DEFAULT_BOUNDS[2] - DEFAULT_BOUNDS[0]))
-        return row, col
+        print(f"Error in geo_to_pixel for ({lon}, {lat}): {e}")
+        print(f"Using emergency fallback conversion")
+        return fallback_geo_to_pixel(lon, lat)
+
+# Fallback implementation for geo_to_pixel
+def fallback_geo_to_pixel(lon, lat):
+    # Use Delhi's approximate bounds for a fallback conversion
+    # This creates a virtual 1000x1000 grid over Delhi
+    min_lon, min_lat, max_lon, max_lat = DEFAULT_BOUNDS
+    
+    # Ensure coordinates are within bounds
+    bounded_lon = max(min_lon, min(lon, max_lon))
+    bounded_lat = max(min_lat, min(lat, max_lat))
+    
+    # Calculate normalized position (0-1)
+    norm_x = (bounded_lon - min_lon) / (max_lon - min_lon)
+    norm_y = (bounded_lat - min_lat) / (max_lat - min_lat)
+    
+    # Convert to pixel coordinates (500x500 grid)
+    col = int(500 * norm_x)
+    row = int(500 * (1 - norm_y))  # Invert y-axis
+    
+    print(f"Fallback conversion: ({lon}, {lat}) -> ({row}, {col})")
+    return row, col
 
 # Get AQI color based on value
 def get_aqi_color(aqi_value):
@@ -132,136 +186,164 @@ def get_air_quality():
         # Validate bounds
         if not all(isinstance(x, (int, float)) for x in [lat_min, lat_max, lon_min, lon_max, zoom_level]):
             print(f"Invalid bounds: lat_min={lat_min}, lat_max={lat_max}, lon_min={lon_min}, lon_max={lon_max}")
-            return generate_mock_data(28.4, 28.9, 76.8, 77.4, 10)
+            return jsonify({"error": "Invalid bounds parameters"}), 400
         
-        # For too large areas, provide less detailed data
-        if abs(lat_max - lat_min) > 2 or abs(lon_max - lon_min) > 2:
-            print("Area too large, using simplified data")
-            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
+        # For too large areas, provide less detailed data but still use real data when possible
+        use_super_resolution = not (abs(lat_max - lat_min) > 2 or abs(lon_max - lon_min) > 2)
     
+        if not GEOTIFF_EXISTS:
+            print("Warning: GeoTIFF file not found, using mock data")
+            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
+            
         try:
-            if os.path.exists(GEOTIFF_PATH):
-                with rasterio.open(GEOTIFF_PATH) as src:
-                    try:
-                        # Convert geographic bounds to pixel coordinates
-                        row_min, col_min = geo_to_pixel(lon_min, lat_max)  # Upper left
-                        row_max, col_max = geo_to_pixel(lon_max, lat_min)  # Lower right
-                        
-                        # Ensure coordinates are within bounds
-                        row_min = max(0, min(row_min, src.height - 1))
-                        row_max = max(0, min(row_max, src.height - 1))
-                        col_min = max(0, min(col_min, src.width - 1))
-                        col_max = max(0, min(col_max, src.width - 1))
-                        
-                        # Make sure we have a valid window
-                        if row_min >= row_max or col_min >= col_max:
-                            print(f"Invalid window: rows({row_min},{row_max}), cols({col_min},{col_max})")
-                            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
-                        
-                        # Read data within bounds
-                        window = ((row_min, row_max), (col_min, col_max))
-                        raster_data = src.read(1, window=window)
-                        
-                        # Check if we got any valid data
-                        if raster_data.size == 0 or np.all(np.isnan(raster_data)):
-                            print("Empty or NaN data from raster")
-                            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
-                        
-                        # If zoom level is high, apply super-resolution
-                        if zoom_level >= 12:
-                            try:
-                                # Normalize safely with handling for edge cases
-                                data_min = np.nanmin(raster_data) if raster_data.size > 0 else 0
-                                data_max = np.nanmax(raster_data) if raster_data.size > 0 else 255
-                                
-                                # Handle case where min == max (constant values)
-                                if data_max == data_min:
-                                    data_norm = np.zeros_like(raster_data, dtype=np.float32)
-                                else:
-                                    data_norm = (raster_data - data_min) / (data_max - data_min)
-                                
-                                # Replace NaNs with zeros
-                                data_norm = np.nan_to_num(data_norm)
-                                
-                                data_input = np.expand_dims(np.expand_dims(data_norm, axis=0), axis=-1)
-                                
-                                # Apply model
-                                data_sr = model.predict(data_input, verbose=0)[0, :, :, 0]
-                                
-                                # Scale back
-                                if data_max != data_min:
-                                    raster_data = (data_sr * (data_max - data_min) + data_min).astype(np.float32)
-                                else:
-                                    raster_data = np.full_like(data_sr, data_min, dtype=np.float32)
-                            except Exception as e:
-                                print(f"Error in super-resolution: {e}")
-                                # Continue with original data if SR fails
-                        
-                        # Sample points for the response
-                        # The higher the zoom level, the more points we include
-                        sample_rate = max(1, int(raster_data.shape[0] * raster_data.shape[1] / (500 * zoom_level / 10)))
-                        
-                        features = []
-                        for i in range(0, raster_data.shape[0], sample_rate):
-                            for j in range(0, raster_data.shape[1], sample_rate):
-                                if i < raster_data.shape[0] and j < raster_data.shape[1]:
-                                    try:
-                                        # Get pixel value
-                                        value = float(raster_data[i, j])
-                                        
-                                        # Skip NaN values
-                                        if np.isnan(value):
-                                            continue
-                                        
-                                        # Convert to AQI scale (0-500)
-                                        # You may need to adjust this scaling based on your data
-                                        aqi = min(500, max(0, int(value * 500 / 255)))
-                                        
-                                        # Get coordinates
-                                        lon, lat = pixel_to_geo(row_min + i, col_min + j)
-                                        
-                                        features.append({
-                                            "type": "Feature",
-                                            "properties": {
-                                                "aqi": aqi,
-                                                "color": get_aqi_color(aqi)
-                                            },
-                                            "geometry": {
-                                                "type": "Point",
-                                                "coordinates": [lon, lat]
-                                            }
-                                        })
-                                    except Exception as e:
-                                        print(f"Error processing point at ({i},{j}): {e}")
-                                        continue
-                        
-                        # If we have no features (maybe all NaNs), return mock data
-                        if not features:
-                            print("No valid features found in raster data")
-                            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
-                        
-                        return jsonify({
-                            "type": "FeatureCollection",
-                            "features": features
-                        })
-                    except Exception as e:
-                        print(f"Error processing raster: {e}")
-                        print(traceback.format_exc())
+            with rasterio.open(GEOTIFF_PATH) as src:
+                try:
+                    # Convert geographic bounds to pixel coordinates
+                    row_min, col_min = geo_to_pixel(lon_min, lat_max)  # Upper left
+                    row_max, col_max = geo_to_pixel(lon_max, lat_min)  # Lower right
+                    
+                    print(f"Initial window: rows({row_min},{row_max}), cols({col_min},{col_max})")
+                    
+                    # Ensure coordinates are within bounds and properly ordered
+                    row_min = max(0, min(row_min, src.height - 1))
+                    row_max = max(0, min(row_max, src.height - 1))
+                    col_min = max(0, min(col_min, src.width - 1))
+                    col_max = max(0, min(col_max, src.width - 1))
+                    
+                    # Swap if needed to ensure row_min < row_max and col_min < col_max
+                    if row_min > row_max:
+                        row_min, row_max = row_max, row_min
+                    if col_min > col_max:
+                        col_min, col_max = col_max, col_min
+                    
+                    # Ensure we have a valid window size (at least 1x1)
+                    if row_min == row_max:
+                        row_max = min(row_min + 1, src.height - 1)
+                    if col_min == col_max:
+                        col_max = min(col_min + 1, src.width - 1)
+                    
+                    print(f"Adjusted window: rows({row_min},{row_max}), cols({col_min},{col_max})")
+                    
+                    # Make sure we have a valid window
+                    if row_min >= row_max or col_min >= col_max:
+                        print(f"Invalid window after adjustment: rows({row_min},{row_max}), cols({col_min},{col_max})")
                         return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
-            else:
-                # Generate mock data if GeoTIFF is missing
-                return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
-                
+                    
+                    # Read data within bounds
+                    window = ((row_min, row_max), (col_min, col_max))
+                    raster_data = src.read(1, window=window)
+                    
+                    # Check if we got any valid data
+                    if raster_data.size == 0 or np.all(np.isnan(raster_data)):
+                        print("Empty or NaN data from raster")
+                        return jsonify({"error": "No valid data in selected region"}), 400
+                    
+                    # If zoom level is high and model is loaded, apply super-resolution
+                    if zoom_level >= 12 and use_super_resolution and MODEL_LOADED:
+                        print(f"Applying super-resolution at zoom level {zoom_level}")
+                        try:
+                            # Normalize safely with handling for edge cases
+                            data_min = np.nanmin(raster_data) if raster_data.size > 0 else 0
+                            data_max = np.nanmax(raster_data) if raster_data.size > 0 else 255
+                            
+                            # Handle case where min == max (constant values)
+                            if data_max == data_min:
+                                data_norm = np.zeros_like(raster_data, dtype=np.float32)
+                            else:
+                                data_norm = (raster_data - data_min) / (data_max - data_min)
+                            
+                            # Replace NaNs with zeros
+                            data_norm = np.nan_to_num(data_norm)
+                            
+                            data_input = np.expand_dims(np.expand_dims(data_norm, axis=0), axis=-1)
+                            
+                            # Apply model for super-resolution
+                            print("Running SRCNN model for super-resolution...")
+                            data_sr = model.predict(data_input, verbose=0)[0, :, :, 0]
+                            print(f"Super-resolution complete: Input shape {data_input.shape} → Output shape {data_sr.shape}")
+                            
+                            # Scale back
+                            if data_max != data_min:
+                                raster_data = (data_sr * (data_max - data_min) + data_min).astype(np.float32)
+                            else:
+                                raster_data = np.full_like(data_sr, data_min, dtype=np.float32)
+                        except Exception as e:
+                            print(f"Error in super-resolution: {e}")
+                            print(traceback.format_exc())
+                            # Continue with original data if SR fails
+                    else:
+                        if zoom_level >= 12 and not MODEL_LOADED:
+                            print("Super-resolution not applied: Model not loaded")
+                        elif zoom_level >= 12 and not use_super_resolution:
+                            print("Super-resolution not applied: Area too large")
+                        else:
+                            print(f"Super-resolution not needed at zoom level {zoom_level}")
+                    
+                    # Sample points for the response
+                    # The higher the zoom level, the more points we include
+                    sample_rate = max(1, int(raster_data.shape[0] * raster_data.shape[1] / (500 * zoom_level / 10)))
+                    
+                    features = []
+                    for i in range(0, raster_data.shape[0], sample_rate):
+                        for j in range(0, raster_data.shape[1], sample_rate):
+                            if i < raster_data.shape[0] and j < raster_data.shape[1]:
+                                try:
+                                    # Get pixel value
+                                    value = float(raster_data[i, j])
+                                    
+                                    # Skip NaN values
+                                    if np.isnan(value):
+                                        continue
+                                    
+                                    # Convert to AQI scale (0-500)
+                                    aqi = min(500, max(0, int(value * 500 / 255)))
+                                    
+                                    # Get coordinates
+                                    lon, lat = pixel_to_geo(row_min + i, col_min + j)
+                                    
+                                    features.append({
+                                        "type": "Feature",
+                                        "properties": {
+                                            "aqi": aqi,
+                                            "color": get_aqi_color(aqi),
+                                            "is_model_data": True
+                                        },
+                                        "geometry": {
+                                            "type": "Point",
+                                            "coordinates": [lon, lat]
+                                        }
+                                    })
+                                except Exception as e:
+                                    print(f"Error processing point at ({i},{j}): {e}")
+                                    continue
+                    
+                    # If we have no features (maybe all NaNs), return appropriate error
+                    if not features:
+                        print("No valid features found in raster data")
+                        return jsonify({"error": "No valid data points in selected region"}), 400
+                    
+                    return jsonify({
+                        "type": "FeatureCollection",
+                        "features": features,
+                        "metadata": {
+                            "used_model": MODEL_LOADED and zoom_level >= 12 and use_super_resolution,
+                            "zoom_level": zoom_level,
+                            "real_data": True
+                        }
+                    })
+                except Exception as e:
+                    print(f"Error processing raster: {e}")
+                    print(traceback.format_exc())
+                    return jsonify({"error": f"Error processing raster data: {str(e)}"}), 500
         except Exception as e:
             print(f"Error opening GeoTIFF: {e}")
             print(traceback.format_exc())
-            return generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level)
+            return jsonify({"error": f"Error opening GeoTIFF file: {str(e)}"}), 500
             
     except Exception as e:
         print(f"Unhandled exception in get_air_quality: {e}")
         print(traceback.format_exc())
-        # Emergency fallback - always return something
-        return generate_mock_data(28.4, 28.9, 76.8, 77.4, 10)
+        return jsonify({"error": f"Unhandled server error: {str(e)}"}), 500
 
 def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
     """Generate mock AQI data for a given region"""
@@ -270,6 +352,8 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
         # Adjust density based on zoom level
         grid_size = int(5 + zoom_level / 2)
         grid_size = min(max(grid_size, 5), 30)  # Keep grid size reasonable
+        
+        print(f"Generating mock data grid: {grid_size}x{grid_size} for zoom level {zoom_level}")
         
         for i in range(grid_size):
             for j in range(grid_size):
@@ -288,7 +372,8 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                         "type": "Feature",
                         "properties": {
                             "aqi": aqi,
-                            "color": get_aqi_color(aqi)
+                            "color": get_aqi_color(aqi),
+                            "is_model_data": False
                         },
                         "geometry": {
                             "type": "Point",
@@ -307,7 +392,8 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 "type": "Feature",
                 "properties": {
                     "aqi": 150,
-                    "color": get_aqi_color(150)
+                    "color": get_aqi_color(150),
+                    "is_model_data": False
                 },
                 "geometry": {
                     "type": "Point",
@@ -315,9 +401,17 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 }
             })
         
+        print(f"Generated {len(features)} mock data points")
+        
         return jsonify({
             "type": "FeatureCollection",
-            "features": features
+            "features": features,
+            "metadata": {
+                "used_model": False,
+                "zoom_level": zoom_level,
+                "real_data": False,
+                "is_mock_data": True
+            }
         })
     except Exception as e:
         print(f"Error in generate_mock_data: {e}")
@@ -329,13 +423,21 @@ def generate_mock_data(lat_min, lat_max, lon_min, lon_max, zoom_level):
                 "type": "Feature",
                 "properties": {
                     "aqi": 150,
-                    "color": "#FF7E00"
+                    "color": "#FF7E00",
+                    "is_model_data": False
                 },
                 "geometry": {
                     "type": "Point",
                     "coordinates": [77.2, 28.6]
                 }
-            }]
+            }],
+            "metadata": {
+                "used_model": False,
+                "zoom_level": zoom_level,
+                "real_data": False,
+                "is_mock_data": True,
+                "is_emergency_fallback": True
+            }
         })
 
 @app.route('/api/get_forecast', methods=['POST'])
@@ -365,6 +467,16 @@ def get_forecast():
 @app.route('/api/test', methods=['GET'])
 def test_endpoint():
     return jsonify({"status": "ok", "message": "Server is running"})
+
+@app.route('/api/model_status', methods=['GET'])
+def model_status():
+    """Return the status of the model and data files"""
+    return jsonify({
+        "model_loaded": MODEL_LOADED,
+        "geotiff_exists": GEOTIFF_EXISTS,
+        "model_path": model_path,
+        "geotiff_path": GEOTIFF_PATH
+    })
 
 if __name__ == '__main__':
     init_geotiff()

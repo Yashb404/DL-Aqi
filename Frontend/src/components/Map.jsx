@@ -1,4 +1,6 @@
-import { useRef, useCallback, useState } from 'react';
+"use client"
+
+import { useRef, useCallback, useState, useEffect } from 'react';
 import Map, { Source, Layer, NavigationControl } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useAQI } from '../context/AQIContext';
@@ -30,7 +32,8 @@ export default function MapComponent() {
     setViewState, 
     aqiData, 
     handlePointClick,
-    DELHI_BOUNDS
+    DELHI_BOUNDS,
+    error: contextError
   } = useAQI();
   
   const mapRef = useRef(null);
@@ -38,6 +41,26 @@ export default function MapComponent() {
     heatmap: true,
     points: true
   });
+  const [dataError, setDataError] = useState(null);
+  
+  // Log AQI data for debugging
+  useEffect(() => {
+    if (contextError) {
+      console.error("Context error:", contextError);
+      setDataError(contextError);
+    } else if (aqiData) {
+      console.log(`Map received AQI data with ${aqiData.features?.length || 0} features`);
+      if (!aqiData.features || aqiData.features.length === 0) {
+        console.warn('No features in AQI data');
+        setDataError('No AQI data points available');
+      } else {
+        setDataError(null);
+        console.log('Sample feature:', aqiData.features[0]);
+      }
+    } else {
+      console.log('No AQI data available');
+    }
+  }, [aqiData, contextError]);
   
   // Keep the viewport within Delhi bounds
   const handleMove = useCallback((evt) => {
@@ -185,16 +208,113 @@ export default function MapComponent() {
       >
         <NavigationControl position="top-right" showCompass={true} />
         
-        {/* Heatmap Layer - optimized component */}
-        {visibleLayers.heatmap && aqiData && (
-          <HeatmapLayer 
-            aqiData={aqiData} 
-            zoom={viewState.zoom} 
-          />
+        {/* Simple Direct Heatmap */}
+        {visibleLayers.heatmap && aqiData && aqiData.features && aqiData.features.length > 0 && (
+          <Source
+            id="direct-heatmap"
+            type="geojson"
+            data={aqiData}
+          >
+            <Layer
+              id="aqi-heat"
+              type="heatmap"
+              paint={{
+                // Fixed weight for testing
+                'heatmap-weight': 1, // Use a constant weight instead of interpolation
+                
+                // Much higher intensity
+                'heatmap-intensity': [
+                  'interpolate',
+                  ['linear'],
+                  ['zoom'],
+                  8, 1,
+                  12, 2,
+                  15, 3
+                ],
+                
+                // Brighter colors
+                'heatmap-color': [
+                  'interpolate',
+                  ['linear'],
+                  ['heatmap-density'],
+                  0, 'rgba(33, 102, 172, 0)',
+                  0.2, 'rgb(103, 169, 207)',
+                  0.4, 'rgb(209, 229, 240)',
+                  0.6, 'rgb(253, 219, 199)',
+                  0.8, 'rgb(239, 138, 98)',
+                  1, 'rgb(178, 24, 43)'
+                ],
+                
+                // Much larger radius for visibility
+                'heatmap-radius': [
+                  'interpolate',
+                  ['linear'],
+                  ['zoom'],
+                  8, 30,
+                  11, 50,
+                  15, 70
+                ],
+                
+                // Full opacity
+                'heatmap-opacity': 1
+              }}
+            />
+          </Source>
+        )}
+        
+        {/* Much simpler heatmap as fallback */}
+        {aqiData && aqiData.features && aqiData.features.length > 0 && (
+          <Source
+            id="simple-heatmap"
+            type="geojson"
+            data={aqiData}
+          >
+            <Layer
+              id="simple-heat"
+              type="heatmap"
+              paint={{
+                'heatmap-weight': 1,
+                'heatmap-intensity': 1,
+                'heatmap-color': [
+                  'step',
+                  ['heatmap-density'],
+                  'rgba(0, 0, 255, 0)',
+                  0.1, '#0080ff',
+                  0.3, '#00ff00',
+                  0.5, '#ffff00',
+                  0.7, '#ff0000',
+                  1.0, '#ff0000'
+                ],
+                'heatmap-radius': 40,
+                'heatmap-opacity': 1
+              }}
+            />
+          </Source>
+        )}
+        
+        {/* Big visible circles as last resort */}
+        {aqiData && aqiData.features && aqiData.features.length > 0 && (
+          <Source
+            id="test-circles"
+            type="geojson"
+            data={aqiData}
+          >
+            <Layer
+              id="data-circles"
+              type="circle"
+              paint={{
+                'circle-radius': 20,
+                'circle-color': '#ff0000',
+                'circle-opacity': 0.5,
+                'circle-stroke-width': 1,
+                'circle-stroke-color': '#fff'
+              }}
+            />
+          </Source>
         )}
         
         {/* Points Layer */}
-        {aqiData && visibleLayers.points && (
+        {aqiData && aqiData.features && aqiData.features.length > 0 && visibleLayers.points && (
           <Source type="geojson" data={aqiData}>
             <Layer {...pointLayer} />
           </Source>
@@ -202,6 +322,52 @@ export default function MapComponent() {
         
         <AQILegend />
       </Map>
+      
+      {/* Data status indicator */}
+      <div style={{
+        position: 'absolute',
+        top: '10px',
+        left: '10px',
+        background: 'rgba(255,255,255,0.9)',
+        padding: '5px',
+        borderRadius: '4px',
+        fontSize: '12px',
+        zIndex: 999,
+      }}>
+        {aqiData ? (
+          <div>
+            <strong>Data Points:</strong> {aqiData.features?.length || 0}
+            {aqiData.metadata?.is_mock_data && (
+              <span style={{color: 'orange'}}> (Mock Data)</span>
+            )}
+          </div>
+        ) : (
+          <div style={{color: 'red'}}>No Data Available</div>
+        )}
+      </div>
+      
+      {/* Data error message */}
+      {dataError && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'rgba(255,255,255,0.9)',
+          padding: '10px 15px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+          zIndex: 1000,
+          textAlign: 'center',
+          maxWidth: '80%'
+        }}>
+          <h3 style={{ margin: '0 0 5px 0', color: '#d32f2f' }}>Data Error</h3>
+          <p style={{ margin: 0 }}>{dataError}</p>
+          <p style={{ fontSize: '0.9em', marginTop: '8px' }}>
+            Try adjusting the map view or zoom level
+          </p>
+        </div>
+      )}
       
       {/* Layer toggle controls */}
       <div className={styles.layerControls}>

@@ -1,3 +1,4 @@
+"use client"
 // src/components/Sidebar.jsx
 import { useAQI } from '../context/AQIContext';
 import { getAqiColor, getAqiCategory } from '../utils/colors';

@@ -1,3 +1,5 @@
+"use client"
+
 import { createContext, useContext, useState, useEffect } from 'react';
 import { fetchAirQualityData } from '../utils/api';
 import { DELHI_CENTER, DELHI_BOUNDS } from '../config/constants';
@@ -18,12 +20,17 @@ export function AQIProvider({ children }) {
   const [aqiData, setAqiData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const [error, setError] = useState(null);
   
   // Initial data load
   useEffect(() => {
     const loadInitialData = async () => {
       setLoading(true);
+      setError(null);
+      
       try {
+        console.log("Loading initial AQI data...");
+        
         // Load data for entire Delhi region initially
         const bounds = {
           lat_min: DELHI_BOUNDS.minLatitude,
@@ -33,10 +40,20 @@ export function AQIProvider({ children }) {
           zoom_level: Math.floor(viewState.zoom)
         };
         
+        console.log("Initial bounds:", bounds);
         const data = await fetchAirQualityData(bounds);
-        setAqiData(data);
+        
+        if (!data || !data.features) {
+          console.error("Invalid data received:", data);
+          setError("Invalid data format received from server");
+        } else {
+          console.log(`Received ${data.features.length} data points`);
+          setAqiData(data);
+          setError(null);
+        }
       } catch (error) {
         console.error("Error fetching initial AQI data:", error);
+        setError(`Failed to load initial data: ${error.message}`);
       } finally {
         setLoading(false);
       }
@@ -61,10 +78,114 @@ export function AQIProvider({ children }) {
           zoom_level: Math.floor(viewState.zoom)
         };
         
-        const data = await fetchAirQualityData(bounds);
-        setAqiData(data);
+        console.log(`Fetching AQI data at zoom ${viewState.zoom}, bounds:`, bounds);
+        
+        // Set useMockData to true to force using mock data
+        const useMockData = true; // TEMPORARY: Force mock data for testing heatmap
+        let data;
+        
+        if (useMockData) {
+          console.log("FORCING MOCK DATA FOR TESTING");
+          // Import the mock data generator
+          const { default: generateMockData } = await import('../utils/api.js').then(m => ({ default: m.generateMockData || function(bounds) {
+            // Inline mock data generator if the import fails
+            const features = [];
+            const gridSize = 20;
+            for (let i = 0; i < gridSize; i++) {
+              for (let j = 0; j < gridSize; j++) {
+                const lat = bounds.lat_min + (bounds.lat_max - bounds.lat_min) * (i / (gridSize - 1));
+                const lon = bounds.lon_min + (bounds.lon_max - bounds.lon_min) * (j / (gridSize - 1));
+                
+                const aqi = 50 + (i + j) * 10 + Math.random() * 50;
+                
+                features.push({
+                  type: 'Feature',
+                  properties: {
+                    aqi: aqi,
+                    intensity: aqi / 500,
+                    is_mock_data: true
+                  },
+                  geometry: {
+                    type: 'Point',
+                    coordinates: [lon, lat]
+                  }
+                });
+                
+                // Add extra points around
+                for (let k = 0; k < 3; k++) {
+                  const latJitter = (Math.random() - 0.5) * 0.02;
+                  const lonJitter = (Math.random() - 0.5) * 0.02;
+                  
+                  features.push({
+                    type: 'Feature',
+                    properties: {
+                      aqi: aqi + Math.random() * 50 - 25,
+                      intensity: aqi / 500,
+                      is_mock_data: true
+                    },
+                    geometry: {
+                      type: 'Point',
+                      coordinates: [lon + lonJitter, lat + latJitter]
+                    }
+                  });
+                }
+              }
+            }
+            
+            return {
+              type: 'FeatureCollection',
+              features: features,
+              metadata: {
+                is_mock_data: true,
+                mock_reason: 'Forced for testing'
+              }
+            };
+          }}));
+          
+          data = generateMockData(bounds);
+          console.log(`Using ${data.features.length} mock points instead of API data`);
+        } else {
+          data = await fetchAirQualityData(bounds);
+        }
+        
+        if (!data || !data.features) {
+          console.error("Invalid data received on viewport change:", data);
+          setError("Invalid data format received from server");
+        } else {
+          console.log(`Received ${data.features.length} data points for viewport`);
+          if (data.features.length > 0) {
+            console.log('Sample feature:', data.features[0]);
+          }
+          
+          // Check for missing properties in features and add them
+          const processedFeatures = data.features.map(feature => {
+            if (!feature.properties) {
+              feature.properties = {};
+            }
+            
+            if (typeof feature.properties.aqi !== 'number') {
+              feature.properties.aqi = 100; // Default AQI
+            }
+            
+            if (!feature.properties.intensity) {
+              feature.properties.intensity = feature.properties.aqi / 500;
+            }
+            
+            return feature;
+          });
+          
+          // Replace the features with processed ones
+          const finalData = {
+            ...data,
+            features: processedFeatures
+          };
+          
+          setAqiData(finalData);
+          setError(null);
+        }
       } catch (error) {
         console.error("Error fetching AQI data:", error);
+        setError(`Failed to update data: ${error.message}`);
       } finally {
         setLoading(false);
       }
@@ -77,6 +198,7 @@ export function AQIProvider({ children }) {
   
   // Handle point selection on map
   const handlePointClick = (point) => {
+    console.log("Selected point:", point);
     setSelectedPoint(point);
   };
 
@@ -88,6 +210,7 @@ export function AQIProvider({ children }) {
     selectedPoint,
     handlePointClick,
     DELHI_BOUNDS,
+    error
   };
 
   return <AQIContext.Provider value={value}>{children}</AQIContext.Provider>;
