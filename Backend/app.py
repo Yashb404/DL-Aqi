@@ -8,17 +8,20 @@ from PIL import Image
 import json
 import cv2
 import traceback
+from pyproj import Proj, Transformer
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import InputLayer, Conv2D
 
 app = Flask(__name__)
 CORS(app)
 
 # Define the SRCNN model architecture manually instead of loading it
 print("Creating SRCNN model manually...")
-model = tf.keras.models.Sequential([
-    tf.keras.layers.InputLayer(input_shape=(None, None, 1)),
-    tf.keras.layers.Conv2D(64, (9, 9), activation='relu', padding='same'),
-    tf.keras.layers.Conv2D(32, (1, 1), activation='relu', padding='same'),
-    tf.keras.layers.Conv2D(1, (5, 5), activation='linear', padding='same')
+model = Sequential([
+    InputLayer(input_shape=(None, None, 1)),
+    Conv2D(64, (9, 9), activation='relu', padding='same'),
+    Conv2D(32, (1, 1), activation='relu', padding='same'),
+    Conv2D(1, (5, 5), activation='linear', padding='same')
 ])
 model.compile(optimizer='adam', loss='mse', metrics=['mae'])
 
@@ -92,42 +95,41 @@ def pixel_to_geo(row, col):
         lat = DEFAULT_BOUNDS[1] + (DEFAULT_BOUNDS[3] - DEFAULT_BOUNDS[1]) * (row / 1000)
         return lon, lat
 
-# Convert geographic coordinates to pixel coordinates
+# Initialize the transformer for WGS 84 to UTM zone 43N
+transformer = Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
+
 def geo_to_pixel(lon, lat):
     try:
         if transform is not None:
-            
-            row, col = rasterio.transform.rowcol(transform, lon, lat)
-            
-            
-            print(f"Converted geo ({lon}, {lat}) to pixel ({row}, {col})")
-            
-            
-            if row < 0 or col < 0 or row > 10000 or col > 10000:
+            # Transform geographic coordinates (lon, lat) to UTM (x, y)
+            x, y = transformer.transform(lon, lat)
+            print(f"Transformed geo ({lon}, {lat}) to UTM ({x}, {y})")
+
+            # Convert UTM coordinates to pixel coordinates
+            row, col = rasterio.transform.rowcol(transform, x, y)
+            print(f"Converted UTM ({x}, {y}) to pixel ({row}, {col})")
+
+            # Validate pixel coordinates
+            if row < 0 or col < 0 or row >= 10000 or col >= 10000:
                 print(f"Suspicious pixel coordinates: ({row}, {col}), using fallback")
                 raise ValueError("Pixel coordinates out of reasonable bounds")
-                
+
             return row, col
         else:
-            
             print(f"No transform available, using bounds-based calculation for ({lon}, {lat})")
             if bounds is not None:
-                
                 norm_x = (lon - bounds[0]) / (bounds[2] - bounds[0])
                 norm_y = (lat - bounds[1]) / (bounds[3] - bounds[1])
-                
-                
+
                 img_height = 1000
                 img_width = 1000
-                
-                
+
                 row = int(img_height * (1 - norm_y))
                 col = int(img_width * norm_x)
-                
+
                 print(f"Bounds-based conversion: ({lon}, {lat}) -> ({row}, {col})")
                 return row, col
             else:
-                
                 return fallback_geo_to_pixel(lon, lat)
     except Exception as e:
         print(f"Error in geo_to_pixel for ({lon}, {lat}): {e}")
@@ -136,21 +138,20 @@ def geo_to_pixel(lon, lat):
 
 
 def fallback_geo_to_pixel(lon, lat):
-    
-    min_lon, min_lat, max_lon, max_lat = DEFAULT_BOUNDS
-    
-    
+    min_lon, min_lat, max_lon, max_lat = bounds if bounds else DEFAULT_BOUNDS
+
+    # Clamp coordinates to the bounds
     bounded_lon = max(min_lon, min(lon, max_lon))
     bounded_lat = max(min_lat, min(lat, max_lat))
-    
-    
+
+    # Normalize coordinates
     norm_x = (bounded_lon - min_lon) / (max_lon - min_lon)
     norm_y = (bounded_lat - min_lat) / (max_lat - min_lat)
-    
-    
+
+    # Convert to pixel coordinates
     col = int(500 * norm_x)
-    row = int(500 * (1 - norm_y))  
-    
+    row = int(500 * (1 - norm_y))
+
     print(f"Fallback conversion: ({lon}, {lat}) -> ({row}, {col})")
     return row, col
 
@@ -470,4 +471,4 @@ def model_status():
 
 if __name__ == '__main__':
     init_geotiff()
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    app.run(debug=True, host='0.0.0.0', port=5000)
